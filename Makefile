@@ -12,8 +12,7 @@ clean:
 	@rm -f ./bin/$(TARGET)
 
 install:
-	@mkdir -p /usr/share/evilginx/phishlets
-	@mkdir -p /usr/share/evilginx/templates
+	@mkdir -p /usr/share/evilginx
 	@cp -r ./phishlets /usr/share/evilginx/
-	@cp ./templates/* /usr/share/evilginx/templates/
+	@cp -r ./templates /usr/share/evilginx/
 	@cp ./bin/$(TARGET) /usr/local/bin
