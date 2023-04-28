@@ -14,6 +14,6 @@ clean:
 install:
 	@mkdir -p /usr/share/evilginx/phishlets
 	@mkdir -p /usr/share/evilginx/templates
-	@cp ./phishlets/* /usr/share/evilginx/phishlets/
+	@cp -r ./phishlets /usr/share/evilginx/
 	@cp ./templates/* /usr/share/evilginx/templates/
 	@cp ./bin/$(TARGET) /usr/local/bin
