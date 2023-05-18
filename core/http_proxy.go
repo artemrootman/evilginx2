@@ -715,6 +715,8 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 				"Content-Security-Policy",
 				"Content-Security-Policy-Report-Only",
 				"Strict-Transport-Security",
+				"Public-Key-Pins",
+				"Public-Key-Pins-Report-Only",
 				"X-XSS-Protection",
 				"X-Content-Type-Options",
 				"X-Frame-Options",
