@@ -5,13 +5,13 @@ PACKAGES=core database log parser
 all: build install
 
 build:
-        @go build -o ./build/$(TARGET) -mod=vendor main.go
+	@go build -o ./build/$(TARGET) -mod=vendor main.go
 
 install:
-        @mkdir -p /usr/share/evilginx
-        @cp -r ./phishlets /usr/share/evilginx/
-        @cp ./build/$(TARGET) /usr/local/bin/
+	@mkdir -p /usr/share/evilginx
+	@cp -r ./phishlets /usr/share/evilginx/
+	@cp ./build/$(TARGET) /usr/local/bin/
 
 clean:
-        @go clean
-        @rm -f ./build/$(TARGET)
+	@go clean
+	@rm -f ./build/$(TARGET)
